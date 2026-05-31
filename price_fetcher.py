@@ -170,6 +170,64 @@ def get_realestate_price(apt_name, lawd_cd="11230", area=None):
     return _cached(cache_key, fetch, ttl=REALESTATE_TTL)
 
 
+def get_realestate_history(apt_name, lawd_cd="11230", months=30):
+    """실거래가 이력 — 최근 N개월 전체 거래 목록 반환 (캐시 24h)"""
+    from datetime import datetime, timedelta
+
+    all_results = []
+    now = datetime.now()
+
+    for i in range(months):
+        ym = (now - timedelta(days=30 * i)).strftime("%Y%m")
+        cache_key = f"realestate_hist_{apt_name}_{lawd_cd}_{ym}"
+
+        def fetch(ym=ym):
+            try:
+                r = requests.get(MOLIT_URL, params={
+                    "serviceKey": MOLIT_API_KEY,
+                    "LAWD_CD":    lawd_cd,
+                    "DEAL_YMD":   ym,
+                    "numOfRows":  "200",
+                    "pageNo":     "1",
+                }, timeout=10)
+                if r.status_code != 200:
+                    return []
+                root = ET.fromstring(r.content)
+                monthly = []
+                for item in root.findall(".//item"):
+                    name = item.findtext("aptNm", "").strip()
+                    if apt_name not in name and name not in apt_name:
+                        continue
+                    price_str = item.findtext("dealAmount", "0").replace(",", "").strip()
+                    if not price_str.isdigit():
+                        continue
+                    area = float(item.findtext("excluUseAr", "0") or 0)
+                    date_str = (
+                        f"{item.findtext('dealYear', '')}-"
+                        f"{item.findtext('dealMonth', '').zfill(2)}-"
+                        f"{item.findtext('dealDay', '').zfill(2)}"
+                    )
+                    monthly.append({
+                        "date":      date_str,
+                        "price_man": int(price_str),
+                        "price_krw": int(price_str) * 10_000,
+                        "area":      area,
+                        "floor":     item.findtext("floor", "").strip(),
+                        "name":      name,
+                        "dong":      item.findtext("umdNm", "").strip(),
+                    })
+                return monthly
+            except Exception:
+                return []
+
+        monthly = _cached(cache_key, fetch, ttl=REALESTATE_TTL)
+        if monthly:
+            all_results.extend(monthly)
+
+    all_results.sort(key=lambda x: x["date"])
+    return all_results
+
+
 def get_asset_current_value(asset):
     """자산 딕셔너리를 받아 현재가(KRW)와 현재평가액(KRW) 반환"""
     category = asset.get("category", "")

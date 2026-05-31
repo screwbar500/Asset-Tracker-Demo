@@ -125,7 +125,8 @@ let coinsChart   = null;
 let editingAssetId = null;
 let _allAssets = [];
 let _pensionSummary = {};
-const ALL_TABS = ['assets', 'bank', 'stocks', 'pension', 'coins', 'loans', 'history'];
+let _reCharts = {};   // 부동산 차트 인스턴스
+const ALL_TABS = ['assets', 'bank', 'stocks', 'pension', 'coins', 'loans', 'realestate', 'history'];
 
 /* ── 초기화 ───────────────────────────────────────────────── */
 window.addEventListener('DOMContentLoaded', () => {
@@ -706,6 +707,190 @@ function sectionTable(label, items, type) {
     </div>`;
 }
 
+/* ── 부동산 탭 ────────────────────────────────────────────── */
+async function renderRealEstateTab() {
+  const el = document.getElementById('realestate-content');
+  el.innerHTML = '<p class="table-empty" style="padding:40px">실거래가 불러오는 중...</p>';
+
+  let data = [];
+  try {
+    data = await fetch('/api/realestate/history').then(r => r.json());
+  } catch(e) { console.error(e); }
+
+  if (!data.length) {
+    el.innerHTML = '<p class="table-empty" style="padding:40px">부동산 자산에 티커(아파트명)를 입력해 주세요.</p>';
+    return;
+  }
+
+  const sections = data.map(apt => {
+    const history = apt.history;
+    if (!history.length) return `<div class="section-group"><p class="table-empty" style="padding:20px">${apt.apt_name} — 최근 거래 없음</p></div>`;
+
+    // 면적별 그룹핑 (5㎡ 단위 반올림)
+    const areaGroups = {};
+    history.forEach(h => {
+      const areaKey = Math.round(h.area * 10) / 10;
+      if (!areaGroups[areaKey]) areaGroups[areaKey] = [];
+      areaGroups[areaKey].push(h);
+    });
+
+    // 거래 건수 많은 면적 순으로 정렬
+    const sortedAreas = Object.keys(areaGroups)
+      .sort((a, b) => areaGroups[b].length - areaGroups[a].length);
+
+    const AREA_COLORS = ['#0066cc','#34c759','#ff9500','#bf5af2','#ff3b30','#30b0c7'];
+
+    // 최신 거래 요약
+    const latest = [...history].sort((a,b) => b.date.localeCompare(a.date))[0];
+    const oldest = history[0];
+    const priceDiff = latest.price_man - oldest.price_man;
+    const pricePct  = oldest.price_man > 0 ? ((priceDiff / oldest.price_man) * 100).toFixed(1) : 0;
+    const pCls = colorClass(priceDiff);
+
+    // 차트 캔버스 ID
+    const canvasId = `re-chart-${apt.asset_id}`;
+
+    // 테이블 (최근 15건)
+    const recentRows = [...history]
+      .sort((a,b) => b.date.localeCompare(a.date))
+      .slice(0, 20)
+      .map(h => `<tr>
+        <td class="td-left" style="color:var(--color-ink-muted-48)">${h.date}</td>
+        <td class="td-left">${h.name}</td>
+        <td style="color:var(--color-ink-muted-48)">${h.area}㎡</td>
+        <td style="color:var(--color-ink-muted-48)">${h.floor}층</td>
+        <td style="font-weight:600">${h.price_man.toLocaleString('ko-KR')}만원</td>
+      </tr>`).join('');
+
+    return `
+      <div class="section-group" style="margin-bottom:32px">
+        <div class="section-group-header">
+          <span class="section-label" style="margin-bottom:0">${apt.asset_name}</span>
+          <div class="section-group-totals">
+            <span class="sg-total-item">최근 거래 <strong>${latest.price_man.toLocaleString('ko-KR')}만원</strong> (${latest.date})</span>
+            <span class="sg-total-item ${pCls}">조회 시작 대비 <strong>${priceDiff >= 0 ? '+' : ''}${priceDiff.toLocaleString('ko-KR')}만원 (${pricePct}%)</strong></span>
+          </div>
+        </div>
+
+        <div class="re-chart-card">
+          <div class="re-chart-legend" id="${canvasId}-legend"></div>
+          <div style="position:relative;height:320px">
+            <canvas id="${canvasId}"></canvas>
+          </div>
+        </div>
+
+        <div class="section-label" style="margin-top:24px;margin-bottom:8px">최근 실거래 내역 (최근 20건)</div>
+        <div class="table-card" style="margin-bottom:0">
+          <table class="asset-table">
+            <thead>
+              <tr>
+                <th class="th-left">거래일</th>
+                <th class="th-left">아파트명</th>
+                <th>전용면적</th>
+                <th>층수</th>
+                <th>거래금액</th>
+              </tr>
+            </thead>
+            <tbody>${recentRows}</tbody>
+          </table>
+        </div>
+      </div>`;
+  }).join('');
+
+  el.innerHTML = sections;
+
+  // 차트 렌더
+  data.forEach(apt => {
+    const history = apt.history;
+    if (!history.length) return;
+
+    const canvasId = `re-chart-${apt.asset_id}`;
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+
+    if (_reCharts[canvasId]) { _reCharts[canvasId].destroy(); }
+
+    // 면적별 그룹핑
+    const areaGroups = {};
+    history.forEach(h => {
+      const k = h.area + '㎡';
+      if (!areaGroups[k]) areaGroups[k] = [];
+      areaGroups[k].push({ x: h.date, y: h.price_man, floor: h.floor });
+    });
+
+    const sortedAreas = Object.keys(areaGroups)
+      .sort((a, b) => areaGroups[b].length - areaGroups[a].length);
+
+    const COLORS = ['#0066cc','#34c759','#ff9500','#bf5af2','#ff3b30','#30b0c7','#8e8e93'];
+
+    const datasets = sortedAreas.map((area, i) => ({
+      label: area,
+      data: areaGroups[area].sort((a,b) => a.x.localeCompare(b.x)),
+      borderColor:     COLORS[i % COLORS.length],
+      backgroundColor: COLORS[i % COLORS.length] + '22',
+      pointBackgroundColor: COLORS[i % COLORS.length],
+      pointBorderColor: '#fff',
+      pointBorderWidth: 2,
+      pointRadius: 6,
+      pointHoverRadius: 9,
+      borderWidth: 2,
+      tension: 0.3,
+      fill: false,
+      showLine: areaGroups[area].length > 1,
+    }));
+
+    // 커스텀 범례
+    const legendEl = document.getElementById(`${canvasId}-legend`);
+    if (legendEl) {
+      legendEl.innerHTML = sortedAreas.map((area, i) =>
+        `<span class="re-legend-item">
+          <span class="re-legend-dot" style="background:${COLORS[i % COLORS.length]}"></span>${area} (${areaGroups[area].length}건)
+        </span>`
+      ).join('');
+    }
+
+    _reCharts[canvasId] = new Chart(canvas, {
+      type: 'line',
+      data: { datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'nearest', intersect: true },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: 'rgba(255,255,255,0.97)',
+            borderColor: '#e0e0e0',
+            borderWidth: 1,
+            titleColor: '#1d1d1f',
+            bodyColor: '#333',
+            padding: 12,
+            callbacks: {
+              title: items => items[0].raw.x,
+              label: item => `  ${item.dataset.label}  ${item.raw.floor}층  ${item.raw.y.toLocaleString('ko-KR')}만원`,
+            },
+          },
+        },
+        scales: {
+          x: {
+            type: 'category',
+            ticks: { color: '#7a7a7a', font: { family: 'Pretendard', size: 11 }, maxTicksLimit: 12 },
+            grid:  { color: 'rgba(0,0,0,0.04)' },
+          },
+          y: {
+            ticks: {
+              color: '#7a7a7a',
+              font: { family: 'Pretendard', size: 11 },
+              callback: v => v.toLocaleString('ko-KR') + '만',
+            },
+            grid: { color: 'rgba(0,0,0,0.04)' },
+          },
+        },
+      },
+    });
+  });
+}
+
 /* ── 탭 전환 ──────────────────────────────────────────────── */
 function switchTab(name) {
   document.querySelectorAll('.sub-tab').forEach((t, i) =>
@@ -713,6 +898,7 @@ function switchTab(name) {
   document.querySelectorAll('.tab-content').forEach(tc =>
     tc.classList.add('hidden'));
   document.getElementById(`tab-${name}`).classList.remove('hidden');
+  if (name === 'realestate') renderRealEstateTab();
 }
 
 /* ── 대출 ─────────────────────────────────────────────────── */

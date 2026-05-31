@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 
 from database import init_db, get_db
-from price_fetcher import get_asset_current_value, get_usd_krw
+from price_fetcher import get_asset_current_value, get_usd_krw, get_realestate_history
 from loan_calculator import (
     full_loan_info,
     equal_principal_schedule,
@@ -297,6 +297,34 @@ def preview_rate_change(loan_id):
         "new_monthly_payment":   info["monthly_payment"],
         "monthly_diff":          info["monthly_payment"] - current_info["monthly_payment"],
     })
+
+
+# ── 부동산 실거래가 이력 ──────────────────────────────────────
+@app.route("/api/realestate/history")
+def realestate_history():
+    """부동산 자산의 실거래가 이력 반환"""
+    conn = get_db()
+    re_assets = conn.execute(
+        "SELECT * FROM assets WHERE category='real_estate' AND ticker != ''"
+    ).fetchall()
+    conn.close()
+
+    result = []
+    for asset in re_assets:
+        asset = dict(asset)
+        ticker   = asset["ticker"]
+        notes    = asset.get("notes", "").strip()
+        lawd_cd  = notes if len(notes) == 5 and notes.isdigit() else "11230"
+        history  = get_realestate_history(ticker, lawd_cd=lawd_cd)
+        result.append({
+            "asset_id":   asset["id"],
+            "asset_name": asset["name"],
+            "apt_name":   ticker,
+            "lawd_cd":    lawd_cd,
+            "history":    history,
+        })
+
+    return jsonify(result)
 
 
 # ── 연금 원금 납입 관리 ──────────────────────────────────────
