@@ -1,0 +1,6 @@
+flask
+yfinance
+requests
+python-dateutil
+gunicorn
+lxml
