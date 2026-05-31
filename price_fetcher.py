@@ -170,18 +170,20 @@ def get_realestate_price(apt_name, lawd_cd="11230", area=None):
     return _cached(cache_key, fetch, ttl=REALESTATE_TTL)
 
 
-def get_realestate_history(apt_name, lawd_cd="11230", months=30):
+def get_realestate_history(apt_name, lawd_cd="11230", months=84):  # 최대 7년
     """실거래가 이력 — 최근 N개월 전체 거래 목록 반환 (캐시 24h)"""
     from datetime import datetime, timedelta
 
-    all_results = []
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     now = datetime.now()
 
-    for i in range(months):
+    def fetch_month(i):
         ym = (now - timedelta(days=30 * i)).strftime("%Y%m")
         cache_key = f"realestate_hist_{apt_name}_{lawd_cd}_{ym}"
+        ttl = REALESTATE_TTL if i < 3 else 86400 * 365
 
-        def fetch(ym=ym):
+        def fetch():
             try:
                 r = requests.get(MOLIT_URL, params={
                     "serviceKey": MOLIT_API_KEY,
@@ -220,9 +222,16 @@ def get_realestate_history(apt_name, lawd_cd="11230", months=30):
             except Exception:
                 return []
 
-        monthly = _cached(cache_key, fetch, ttl=REALESTATE_TTL)
-        if monthly:
-            all_results.extend(monthly)
+        return _cached(cache_key, fetch, ttl=ttl)
+
+    # 캐시 미스된 달만 병렬로 API 호출 (최대 12 스레드)
+    all_results = []
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        futures = {executor.submit(fetch_month, i): i for i in range(months)}
+        for future in as_completed(futures):
+            result = future.result()
+            if result:
+                all_results.extend(result)
 
     all_results.sort(key=lambda x: x["date"])
     return all_results

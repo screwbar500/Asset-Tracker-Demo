@@ -1,6 +1,7 @@
 import os
 from flask import Flask, render_template, jsonify, request
-import json
+import json, requests
+import xml.etree.ElementTree as ET
 from datetime import datetime
 
 from database import init_db, get_db
@@ -297,6 +298,43 @@ def preview_rate_change(loan_id):
         "new_monthly_payment":   info["monthly_payment"],
         "monthly_diff":          info["monthly_payment"] - current_info["monthly_payment"],
     })
+
+
+# ── 부동산 아파트명 검색 (자동완성) ──────────────────────────
+@app.route("/api/realestate/search")
+def realestate_search():
+    """아파트명 검색 자동완성 — 최근 2개월 동대문구 거래에서 추출"""
+    from price_fetcher import MOLIT_API_KEY, MOLIT_URL
+    import xml.etree.ElementTree as ET
+    from datetime import datetime, timedelta
+
+    q       = request.args.get("q", "").strip()
+    lawd_cd = request.args.get("lawd_cd", "11230")
+    if not q or len(q) < 1:
+        return jsonify([])
+
+    names = set()
+    now   = datetime.now()
+    for i in range(3):
+        ym = (now - timedelta(days=30*i)).strftime("%Y%m")
+        try:
+            r = requests.get(MOLIT_URL, params={
+                "serviceKey": MOLIT_API_KEY,
+                "LAWD_CD":    lawd_cd,
+                "DEAL_YMD":   ym,
+                "numOfRows":  "500",
+            }, timeout=8)
+            if r.status_code != 200:
+                continue
+            root = ET.fromstring(r.content)
+            for item in root.findall(".//item"):
+                name = item.findtext("aptNm", "").strip()
+                if q in name:
+                    names.add(name)
+        except Exception:
+            continue
+
+    return jsonify(sorted(names)[:15])
 
 
 # ── 부동산 실거래가 이력 ──────────────────────────────────────
