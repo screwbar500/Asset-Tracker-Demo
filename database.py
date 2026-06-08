@@ -74,6 +74,17 @@ def init_db():
         created_at TEXT DEFAULT (datetime('now','localtime'))
     );
 
+    -- 실현손익 기록
+    CREATE TABLE IF NOT EXISTS realized_pnl (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category TEXT NOT NULL DEFAULT 'stocks',
+        year  INTEGER NOT NULL,
+        month INTEGER NOT NULL,        -- 0 = 연간 합산 (직접 입력), 1~12 = 월별
+        amount REAL NOT NULL,
+        memo TEXT DEFAULT '',
+        created_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+
     CREATE TABLE IF NOT EXISTS snapshots (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         snapshot_date TEXT NOT NULL,

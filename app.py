@@ -1,6 +1,5 @@
-import os
-from flask import Flask, render_template, jsonify, request
-import json, requests
+from flask import Flask, render_template, jsonify, request, Response
+import json, math, requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
@@ -16,6 +15,19 @@ from loan_calculator import (
 
 app = Flask(__name__)
 init_db()
+
+def safe_json(obj):
+    """NaN/Infinity를 null로 바꿔서 유효한 JSON 반환"""
+    def fix(o):
+        if isinstance(o, float) and (math.isnan(o) or math.isinf(o)):
+            return None
+        if isinstance(o, dict):
+            return {k: fix(v) for k, v in o.items()}
+        if isinstance(o, list):
+            return [fix(v) for v in o]
+        return o
+    return Response(json.dumps(fix(obj), ensure_ascii=False),
+                    mimetype='application/json')
 
 CATEGORY_LABELS = {
     "bank":           "은행 예금/적금",
@@ -63,7 +75,7 @@ def get_assets():
         asset["category_label"]    = CATEGORY_LABELS.get(asset["category"], asset["category"])
         asset["subcategory_label"] = SUBCATEGORY_LABELS.get(asset["subcategory"], asset["subcategory"])
         assets.append(asset)
-    return jsonify(assets)
+    return safe_json(assets)
 
 
 @app.route("/api/assets", methods=["POST"])
@@ -103,6 +115,36 @@ def update_asset(asset_id):
     )
     conn.commit(); conn.close()
     return jsonify({"ok": True})
+
+
+@app.route("/api/assets/<int:asset_id>/buy-more", methods=["POST"])
+def buy_more(asset_id):
+    """추가 매수: 매수금액 + 매수단가 → 수량/평단가/매입금액 자동 재계산"""
+    d = request.json
+    add_amount = float(d["add_amount"])   # 추가 매수금액 (원)
+    add_price  = float(d["add_price"])    # 추가 매수단가
+    if add_price <= 0:
+        return jsonify({"error": "단가가 0입니다"}), 400
+
+    conn = get_db()
+    asset = conn.execute("SELECT * FROM assets WHERE id=?", (asset_id,)).fetchone()
+    if not asset:
+        return jsonify({"error": "자산 없음"}), 404
+
+    old_qty    = float(asset["quantity"] or 0)
+    old_amt    = float(asset["purchase_amount"] or 0)
+    add_qty    = add_amount / add_price
+    new_qty    = old_qty + add_qty
+    new_amt    = old_amt + add_amount
+    new_avg    = new_amt / new_qty if new_qty > 0 else 0
+
+    conn.execute(
+        """UPDATE assets SET quantity=?, avg_price=?, purchase_amount=?,
+           updated_at=datetime('now','localtime') WHERE id=?""",
+        (new_qty, new_avg, new_amt, asset_id)
+    )
+    conn.commit(); conn.close()
+    return jsonify({"ok": True, "new_qty": new_qty, "new_avg": new_avg, "new_amt": new_amt})
 
 
 @app.route("/api/assets/<int:asset_id>", methods=["DELETE"])
@@ -573,6 +615,57 @@ def delete_snapshot(snap_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/realized-pnl", methods=["GET"])
+def get_realized_pnl():
+    category = request.args.get("category", "stocks")
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM realized_pnl WHERE category=? ORDER BY year DESC, month DESC",
+        (category,)
+    ).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+@app.route("/api/realized-pnl", methods=["POST"])
+def add_realized_pnl():
+    d = request.json
+    conn = get_db()
+    if d.get("category") == "coins":
+        # 코인: 거래별 개별 삽입
+        deal_date    = d.get("deal_date", "")
+        year  = int(deal_date[:4])  if deal_date else d.get("year", 0)
+        month = int(deal_date[5:7]) if deal_date else d.get("month", 0)
+        conn.execute(
+            "INSERT INTO realized_pnl (category, year, month, deal_date, amount, memo, ticker, trade_amount, profit_rate) VALUES (?,?,?,?,?,?,?,?,?)",
+            ("coins", year, month, deal_date, d["amount"], d.get("memo",""),
+             d.get("ticker",""), d.get("trade_amount",0), d.get("profit_rate",0))
+        )
+    else:
+        # 주식: year/month 기준 upsert
+        existing = conn.execute(
+            "SELECT id FROM realized_pnl WHERE category=? AND year=? AND month=?",
+            (d["category"], d["year"], d["month"])
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE realized_pnl SET amount=?, memo=? WHERE id=?",
+                (d["amount"], d.get("memo",""), existing["id"])
+            )
+        else:
+            conn.execute(
+                "INSERT INTO realized_pnl (category, year, month, amount, memo) VALUES (?,?,?,?,?)",
+                (d["category"], d["year"], d["month"], d["amount"], d.get("memo",""))
+            )
+    conn.commit(); conn.close()
+    return jsonify({"ok": True})
+
+@app.route("/api/realized-pnl/<int:rid>", methods=["DELETE"])
+def delete_realized_pnl(rid):
+    conn = get_db()
+    conn.execute("DELETE FROM realized_pnl WHERE id=?", (rid,))
+    conn.commit(); conn.close()
+    return jsonify({"ok": True})
+
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5001))
-    app.run(debug=False, host="0.0.0.0", port=port)
+    app.run(debug=True, port=5001)

@@ -84,16 +84,18 @@ def get_us_stock_price(ticker):
 def get_upbit_price(symbol):
     """업비트 KRW 마켓 현재가. symbol: BTC, ETH, ..."""
     def fetch():
-        try:
-            market = f"KRW-{symbol.upper()}"
-            r = requests.get(
-                f"https://api.upbit.com/v1/ticker?markets={market}", timeout=5
-            )
-            data = r.json()
-            if data and isinstance(data, list):
-                return float(data[0]["trade_price"])
-        except Exception:
-            return None
+        market = f"KRW-{symbol.upper()}"
+        for _ in range(3):   # 최대 3회 재시도
+            try:
+                r = requests.get(
+                    f"https://api.upbit.com/v1/ticker?markets={market}", timeout=5
+                )
+                data = r.json()
+                if data and isinstance(data, list):
+                    return float(data[0]["trade_price"])
+            except Exception:
+                time.sleep(0.5)
+        return None
 
     return _cached(f"upbit_{symbol}", fetch)
 
@@ -314,16 +316,21 @@ def get_asset_current_value(asset):
     except Exception:
         current_value = purchase_amount
 
-    if current_value is None:
-        current_value = purchase_amount
+    import math
 
-    profit_loss = current_value - purchase_amount if purchase_amount else 0
-    profit_rate = (profit_loss / purchase_amount * 100) if purchase_amount else 0
+    def safe(v, default=0):
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return default
+        return v
+
+    current_value   = safe(current_value,   purchase_amount)
+    profit_loss     = current_value - purchase_amount if purchase_amount else 0
+    profit_rate     = (profit_loss / purchase_amount * 100) if purchase_amount else 0
 
     return {
-        "current_price_krw": round(current_price_krw) if current_price_krw else None,
+        "current_price_krw":     round(safe(current_price_krw)) if current_price_krw else None,
         "current_price_display": current_price_display,
-        "current_value": round(current_value),
-        "profit_loss": round(profit_loss),
-        "profit_rate": round(profit_rate, 2),
+        "current_value":         round(safe(current_value)),
+        "profit_loss":           round(safe(profit_loss)),
+        "profit_rate":           round(safe(profit_rate), 2),
     }

@@ -126,7 +126,7 @@ let editingAssetId = null;
 let _allAssets = [];
 let _pensionSummary = {};
 let _reCharts = {};   // 부동산 차트 인스턴스
-const ALL_TABS = ['assets', 'bank', 'stocks', 'pension', 'coins', 'loans', 'realestate', 'history'];
+const ALL_TABS = ['assets', 'bank', 'stocks', 'coins', 'pension', 'loans', 'realestate', 'history'];
 
 /* ── 초기화 ───────────────────────────────────────────────── */
 window.addEventListener('DOMContentLoaded', () => {
@@ -170,13 +170,41 @@ function renderCategoryCards(totals, totalAssets, labels) {
 async function loadAssets() {
   try {
     _allAssets = await fetch('/api/assets').then(r => r.json());
-    // 연금 탭을 먼저 로드해서 _pensionSummary 채운 뒤 overview 렌더
     await renderPensionTab(_allAssets);
     renderOverviewTab(_allAssets);
     renderBankTab(_allAssets);
-    renderStocksTab(_allAssets);
-    renderCoinsTab(_allAssets);
-  } catch (e) { console.error('assets error', e); }
+    await renderStocksTab(_allAssets);
+    await renderCoinsTab(_allAssets);
+
+    // 코인 중 조회 실패한 항목이 있으면 자동 재시도 (최대 3회, 3초 간격)
+    scheduleRetryIfNeeded(1);
+  } catch (e) { console.error('loadAssets error', e); }
+}
+
+let _retryTimer = null;
+async function scheduleRetryIfNeeded(attempt) {
+  if (attempt > 3) return;
+  const coinCategories = ['coin_upbit', 'coin_binance'];
+  const failed = _allAssets.filter(a =>
+    coinCategories.includes(a.category) && a.current_price_krw == null
+  );
+  if (!failed.length) return;
+
+  console.log(`조회 실패 ${failed.length}개 — ${attempt}번째 재시도 예정 (3초 후)`);
+  clearTimeout(_retryTimer);
+  _retryTimer = setTimeout(async () => {
+    try {
+      const fresh = await fetch('/api/assets').then(r => r.json());
+      const failedIds = new Set(failed.map(a => a.id));
+      // 실패했던 항목만 업데이트
+      _allAssets = _allAssets.map(a =>
+        failedIds.has(a.id) ? (fresh.find(f => f.id === a.id) || a) : a
+      );
+      await renderCoinsTab(_allAssets);
+      renderOverviewTab(_allAssets);
+      scheduleRetryIfNeeded(attempt + 1);
+    } catch (e) { console.error('retry error', e); }
+  }, 3000);
 }
 
 /* ── 자산현황 탭: 그룹 요약 ───────────────────────────────── */
@@ -291,9 +319,9 @@ function renderBankTab(assets) {
             <thead>
               <tr>
                 <th class="th-left">상품명</th>
-                <th>금액</th>
+                <th style="min-width:120px">금액</th>
                 <th class="th-left">메모</th>
-                <th></th>
+                <th style="min-width:56px"></th>
               </tr>
             </thead>
             <tbody>${tableRows}</tbody>
@@ -404,7 +432,7 @@ function pieHTML(canvasId, items) {
 }
 
 /* ── 주식 탭 ──────────────────────────────────────────────── */
-function renderStocksTab(assets) {
+async function renderStocksTab(assets) {
   const el = document.getElementById('stocks-content');
 
   const STOCK_SECTIONS = [
@@ -417,18 +445,152 @@ function renderStocksTab(assets) {
     .filter(a => (a.category === 'domestic_stock' && ['regular','isa'].includes(a.subcategory)) || a.category === 'us_stock')
     .sort((a, b) => (b.current_value || 0) - (a.current_value || 0));
 
+  const pnlBtn = `<div style="display:flex;justify-content:flex-end;margin-bottom:16px">
+    <button class="btn-secondary-pill" style="font-size:13px;padding:7px 18px" onclick="openPnlPopup('stocks')">실현손익 보기</button>
+  </div>`;
+
   if (!allStocks.length) {
-    el.innerHTML = '<p class="table-empty" style="padding:40px">등록된 주식 종목이 없습니다.</p>';
+    el.innerHTML = pnlBtn;
     return;
   }
 
-  const tables = STOCK_SECTIONS.map(sec => {
-    const items = assets.filter(sec.filter);
-    return items.length ? sectionTable(sec.label, items) : '';
-  }).join('');
-
-  el.innerHTML = pieHTML('stocks-pie-canvas', allStocks) + tables;
+  el.innerHTML = pnlBtn + pieHTML('stocks-pie-canvas', allStocks) + multiSectionTable(STOCK_SECTIONS, assets);
   stocksChart = buildPieChart('stocks-pie-canvas', allStocks, stocksChart);
+}
+
+/* ── 실현손익 섹션 ────────────────────────────────────────── */
+async function renderRealizedPnlSection(category) {
+  const rows = await fetch(`/api/realized-pnl?category=${category}`).then(r => r.json());
+  const thisYear = new Date().getFullYear();
+
+  const fmtPnl = v => {
+    const cls = v > 0 ? 'profit' : v < 0 ? 'loss' : 'neutral';
+    const sign = v > 0 ? '+' : '';
+    return `<span class="${cls}">${sign}${Math.round(v).toLocaleString('ko-KR')}</span>`;
+  };
+
+  if (category === 'coins') {
+    // ── 코인: 거래별 목록 ──────────────────────────────────
+    const sorted = [...rows].sort((a,b) => (b.deal_date||'').localeCompare(a.deal_date||''));
+    const grandTotal = sorted.reduce((s,r) => s + r.amount, 0);
+
+    const trs = sorted.map(r => `
+      <tr>
+        <td class="td-left" style="color:var(--color-ink-muted-48)">${r.deal_date || '—'}</td>
+        <td class="td-left"><strong>${r.ticker || '—'}</strong></td>
+        <td style="color:var(--color-ink-muted-48)">${r.trade_amount ? fmt(r.trade_amount) : '—'}</td>
+        <td style="color:var(--color-ink-muted-48)">${r.profit_rate ? (r.profit_rate > 0 ? '+' : '') + r.profit_rate.toFixed(2) + '%' : '—'}</td>
+        <td>${fmtPnl(r.amount)}</td>
+        <td>
+          <button class="btn-icon-sm" style="color:var(--color-loss)" onclick="deleteRealizedPnl(${r.id},'coins')" title="삭제">✕</button>
+        </td>
+      </tr>`).join('') || '<tr><td colspan="6" class="table-empty">거래 기록이 없습니다.</td></tr>';
+
+    const totalRow = `
+      <tr style="font-weight:700;background:var(--color-surface-raised)">
+        <td class="td-left" colspan="4">누적 합계</td>
+        <td>${fmtPnl(grandTotal)}</td>
+        <td></td>
+      </tr>`;
+
+    return `
+    <div class="table-card" style="margin-bottom:0">
+      <table class="asset-table">
+        <thead><tr>
+          <th class="th-left" style="min-width:100px">거래일</th>
+          <th class="th-left" style="min-width:70px">코인</th>
+          <th style="min-width:110px">거래금액</th>
+          <th style="min-width:80px">수익률</th>
+          <th style="min-width:120px">실현손익</th>
+          <th style="min-width:40px"></th>
+        </tr></thead>
+        <tbody>${trs}${totalRow}</tbody>
+      </table>
+    </div>`;
+  }
+
+  // ── 주식: 연간 합산 + 올해 월별 ──────────────────────────
+  const annualRows  = rows.filter(r => r.month === 0).sort((a,b) => a.year - b.year);
+  const monthlyRows = rows.filter(r => r.month > 0 && r.year === thisYear).sort((a,b) => a.month - b.month);
+  const thisYearMonthlySum = monthlyRows.reduce((s,r) => s + r.amount, 0);
+  const grandTotal = annualRows.reduce((s,r) => s + r.amount, 0) + thisYearMonthlySum;
+
+  const annualTrs = annualRows.map(r => `
+    <tr>
+      <td class="td-left" style="color:var(--color-ink-muted-48)">${r.year}년</td>
+      <td>${fmtPnl(r.amount)}</td>
+      <td>
+        <button class="btn-icon-sm" onclick="openPnlModal('stocks',${r.year},0,${r.amount})" title="편집">✏</button>
+        <button class="btn-icon-sm" style="color:var(--color-loss)" onclick="deleteRealizedPnl(${r.id},'stocks')" title="삭제">✕</button>
+      </td>
+    </tr>`).join('');
+
+  const monthlyTrs = monthlyRows.map(r => `
+    <tr>
+      <td class="td-left" style="color:var(--color-ink-muted-48)">${r.month}월</td>
+      <td>${fmtPnl(r.amount)}</td>
+      <td>
+        <button class="btn-icon-sm" onclick="openPnlModal('stocks',${r.year},${r.month},${r.amount})" title="편집">✏</button>
+        <button class="btn-icon-sm" style="color:var(--color-loss)" onclick="deleteRealizedPnl(${r.id},'stocks')" title="삭제">✕</button>
+      </td>
+    </tr>`).join('');
+
+  const thisYearRow = monthlyRows.length ? `
+    <tr style="font-weight:700;border-top:2px solid var(--color-separator)">
+      <td class="td-left">${thisYear}년 합계</td>
+      <td>${fmtPnl(thisYearMonthlySum)}</td><td></td>
+    </tr>` : '';
+
+  const totalRow = `
+    <tr style="font-weight:700;background:var(--color-surface-raised)">
+      <td class="td-left">누적 합계</td>
+      <td>${fmtPnl(grandTotal)}</td><td></td>
+    </tr>`;
+
+  return `
+  <div class="table-card" style="margin-bottom:0">
+    <table class="asset-table">
+      <thead><tr>
+        <th class="th-left" style="min-width:100px">정산일</th>
+        <th style="min-width:140px">실현손익</th>
+        <th style="min-width:56px"></th>
+      </tr></thead>
+        <tbody>
+          ${annualTrs}
+          ${monthlyTrs ? `
+            <tr class="section-subhead">
+              <td class="td-left" colspan="3" style="font-size:12px;font-weight:600;color:var(--color-ink-muted-48)">${thisYear}년</td>
+            </tr>
+            ${monthlyTrs}
+            ${thisYearRow}` : ''}
+          ${totalRow}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+/* ── 실현손익 팝업 ──────────────────────────────────────────── */
+async function openPnlPopup(category) {
+  const label = category === 'stocks' ? '주식' : '코인';
+  document.getElementById('pnl-popup-title').textContent = `실현손익 · ${label}`;
+  document.getElementById('pnl-popup-category').value = category;
+  await refreshPnlPopup(category);
+  document.getElementById('pnl-popup').classList.remove('hidden');
+}
+
+async function refreshPnlPopup(category) {
+  const body = document.getElementById('pnl-popup-body');
+  body.innerHTML = await renderRealizedPnlSection(category);
+}
+
+function closePnlPopup() {
+  document.getElementById('pnl-popup').classList.add('hidden');
+}
+
+async function deleteRealizedPnl(id, category) {
+  if (!confirm('삭제할까요?')) return;
+  await fetch(`/api/realized-pnl/${id}`, { method: 'DELETE' });
+  await refreshPnlPopup(category);
 }
 
 /* ── 연금 탭 ──────────────────────────────────────────────── */
@@ -515,37 +677,111 @@ async function renderPensionTab(assets) {
     </div>`;
   }).join('');
 
-  // ── 납입 이력 테이블 ───────────────────────────────────
-  const contribRows = contributions.length
-    ? contributions.map(c => `<tr>
-        <td class="td-left" style="color:var(--color-ink-muted-48)">${c.contributed_date}</td>
-        <td class="td-left"><span class="cat-tag cat-tag--pension">${ACCOUNT_LABELS[c.account_type] || c.account_type}</span></td>
-        <td style="font-weight:600">${fmt(c.amount)}</td>
-        <td class="td-left" style="color:var(--color-ink-muted-48)">${c.memo || '—'}</td>
-        <td><button class="btn-icon-sm" onclick="deletePensionContrib(${c.id})" title="삭제" style="color:var(--color-loss)">✕</button></td>
-      </tr>`).join('')
-    : '<tr><td colspan="5" class="table-empty">납입 기록이 없습니다.</td></tr>';
+  // ── 납입 이력 피벗 테이블 ───────────────────────────────────
+  const COL_ORDER  = ['personal_company', 'pension_savings', 'irp'];
+  const COL_LABELS = { personal_company: '개인연금\n/회사', pension_savings: '연금저축\n/연264', irp: 'IRP\n/연300' };
+  const thisYear   = new Date().getFullYear();
 
-  const trackSection = `
+  // 전년도까지 누적 (account별 합계)
+  const prevSum = {};
+  COL_ORDER.forEach(k => prevSum[k] = 0);
+  contributions.forEach(c => {
+    if (parseInt(c.contributed_date.slice(0,4)) < thisYear)
+      prevSum[c.account_type] = (prevSum[c.account_type] || 0) + c.amount;
+  });
+  const prevTotal = COL_ORDER.reduce((s,k) => s + prevSum[k], 0);
+
+  // 올해 월별 피벗 { 'YYYY-MM': { account_type: amount } }
+  const monthMap = {};
+  const idMap    = {};  // 삭제 버튼용 첫 번째 id
+  contributions.forEach(c => {
+    if (parseInt(c.contributed_date.slice(0,4)) !== thisYear) return;
+    const ym = c.contributed_date.slice(0,7);
+    if (!monthMap[ym]) { monthMap[ym] = {}; idMap[ym] = {}; }
+    monthMap[ym][c.account_type] = (monthMap[ym][c.account_type] || 0) + c.amount;
+    if (!idMap[ym][c.account_type]) idMap[ym][c.account_type] = c.id;
+  });
+  const months = Object.keys(monthMap).sort();
+
+  // 올해 합계
+  const yearSum  = {};
+  COL_ORDER.forEach(k => yearSum[k] = months.reduce((s,m) => s + (monthMap[m][k]||0), 0));
+  const yearTotal = COL_ORDER.reduce((s,k) => s + yearSum[k], 0);
+
+  // 누적 합계
+  const cumSum   = {};
+  COL_ORDER.forEach(k => cumSum[k] = prevSum[k] + yearSum[k]);
+  const cumTotal  = COL_ORDER.reduce((s,k) => s + cumSum[k], 0);
+
+  const fmtCell = v => v ? fmt(v) : '<span style="color:var(--color-ink-muted-48)">—</span>';
+
+  const prevRow = prevTotal > 0 ? `<tr style="color:var(--color-ink-muted-48);font-size:13px">
+    <td class="td-left">~${thisYear-1}년 누적</td>
+    ${COL_ORDER.map(k => `<td>${fmtCell(prevSum[k])}</td>`).join('')}
+    <td style="font-weight:600">${fmt(prevTotal)}</td>
+    <td></td>
+  </tr>` : '';
+
+  const monthRows = months.map(ym => {
+    const label = ym.replace('-', '-').slice(2).replace('-0','-').replace(/-(\d)$/,'-0$1'); // YY-M
+    const rowTotal = COL_ORDER.reduce((s,k) => s + (monthMap[ym][k]||0), 0);
+    return `<tr>
+      <td class="td-left">${ym.slice(2).replace('-','년 ')}월</td>
+      ${COL_ORDER.map(k => {
+        const v = monthMap[ym][k];
+        const id = idMap[ym][k];
+        return `<td>${v ? `<span>${fmt(v)}</span>` : '<span style="color:var(--color-ink-muted-48)">—</span>'}${id ? `<button class="btn-icon-sm" onclick="deletePensionContrib(${id})" title="삭제" style="color:var(--color-loss);margin-left:4px;font-size:10px">✕</button>` : ''}</td>`;
+      }).join('')}
+      <td style="font-weight:600">${fmt(rowTotal)}</td>
+      <td></td>
+    </tr>`;
+  }).join('');
+
+  const emptyRow = !months.length ? `<tr><td colspan="${COL_ORDER.length+2}" class="table-empty">올해 납입 기록이 없습니다.</td></tr>` : '';
+
+  const yearRow = `<tr style="border-top:2px solid var(--color-separator);font-weight:700">
+    <td class="td-left">${thisYear}년 합계</td>
+    ${COL_ORDER.map(k => `<td>${fmtCell(yearSum[k])}</td>`).join('')}
+    <td>${fmt(yearTotal)}</td>
+    <td></td>
+  </tr>`;
+
+  const cumRow = `<tr style="background:var(--color-surface-raised);font-weight:700">
+    <td class="td-left">누적 원금 합계</td>
+    ${COL_ORDER.map(k => `<td>${fmtCell(cumSum[k])}</td>`).join('')}
+    <td>${fmt(cumTotal)}</td>
+    <td></td>
+  </tr>`;
+
+  const trackCardsSection = `
     <div class="pension-track-section">
       <div class="section-group-header" style="margin-bottom:16px">
         <span class="section-label" style="margin-bottom:0">원금 납입 추적</span>
         <button class="btn-primary" style="font-size:12px;padding:7px 16px" onclick="openPensionContribModal()">원금 납입 기록</button>
       </div>
       <div class="pension-track-cards">${trackCards}</div>
-      <div class="section-label" style="margin-top:28px;margin-bottom:8px">납입 이력</div>
-      <div class="table-card" style="margin-bottom:0">
+    </div>`;
+
+  const contribTable = `
+    <div class="pension-track-section" style="margin-top:32px">
+      <div class="section-label" style="margin-bottom:8px">납입 이력</div>
+      <div class="table-card" style="margin-bottom:0;overflow-x:auto">
         <table class="asset-table">
           <thead>
             <tr>
-              <th class="th-left">날짜</th>
-              <th class="th-left">계좌</th>
-              <th>납입금액</th>
-              <th class="th-left">메모</th>
-              <th></th>
+              <th class="th-left" style="min-width:90px">기간</th>
+              ${COL_ORDER.map(k => `<th style="min-width:120px">${COL_LABELS[k].replace('\n','<br>')}</th>`).join('')}
+              <th style="min-width:110px">합계</th>
+              <th style="min-width:40px"></th>
             </tr>
           </thead>
-          <tbody id="pension-contrib-tbody">${contribRows}</tbody>
+          <tbody>
+            ${prevRow}
+            ${monthRows}
+            ${emptyRow}
+            ${yearRow}
+            ${cumRow}
+          </tbody>
         </table>
       </div>
     </div>`;
@@ -553,18 +789,13 @@ async function renderPensionTab(assets) {
   // ── 보유 종목 테이블 ───────────────────────────────────
   let holdingSection = '';
   if (allPension.length) {
-    const tables = PENSION_SECTIONS.map(sec => {
-      const items = assets.filter(sec.filter);
-      return items.length ? sectionTable(sec.label, items) : '';
-    }).join('');
-    holdingSection = pieHTML('pension-pie-canvas', allPension) + tables;
+    holdingSection = multiSectionTable(PENSION_SECTIONS, assets);
   }
 
-  el.innerHTML = trackSection + (holdingSection ? `<div style="margin-top:32px">${holdingSection}</div>` : '');
+  el.innerHTML = trackCardsSection
+    + (holdingSection ? `<div class="pension-track-section">${holdingSection}</div>` : '')
+    + contribTable;
 
-  if (allPension.length) {
-    window._pensionChart = buildPieChart('pension-pie-canvas', allPension, window._pensionChart || null);
-  }
 }
 
 /* ── 연금 납입 기록 모달 ────────────────────────────────────── */
@@ -630,7 +861,7 @@ async function savePcValue() {
 }
 
 /* ── 코인 탭 ──────────────────────────────────────────────── */
-function renderCoinsTab(assets) {
+async function renderCoinsTab(assets) {
   const el = document.getElementById('coins-content');
 
   const COIN_SECTIONS = [
@@ -644,21 +875,99 @@ function renderCoinsTab(assets) {
     .sort((a, b) => (b.current_value || 0) - (a.current_value || 0));
 
   if (!allCoins.length) {
-    el.innerHTML = '<p class="table-empty" style="padding:40px">등록된 코인 종목이 없습니다.</p>';
+    el.innerHTML = `<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:16px">
+      <button class="btn-secondary-pill" style="font-size:13px;padding:7px 18px" onclick="openBuyMoreModal()">추가 매수</button>
+      <button class="btn-secondary-pill" style="font-size:13px;padding:7px 18px" onclick="openPnlPopup('coins')">실현손익 보기</button>
+    </div>`;
     return;
   }
 
-  const tables = COIN_SECTIONS.map(sec => {
-    const items = assets.filter(sec.filter);
-    return items.length ? sectionTable(sec.label, items) : '';
-  }).join('');
-
-  el.innerHTML = pieHTML('coins-pie-canvas', allCoins) + tables;
+  el.innerHTML = `<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:16px">
+    <button class="btn-secondary-pill" style="font-size:13px;padding:7px 18px" onclick="openBuyMoreModal()">추가 매수</button>
+    <button class="btn-secondary-pill" style="font-size:13px;padding:7px 18px" onclick="openPnlPopup('coins')">실현손익 보기</button>
+  </div>` + pieHTML('coins-pie-canvas', allCoins) + multiSectionTable(COIN_SECTIONS, assets);
   coinsChart = buildPieChart('coins-pie-canvas', allCoins, coinsChart);
 }
 
+/* ── 추가 매수 모달 ──────────────────────────────────────────── */
+function openBuyMoreModal() {
+  const coins = _allAssets.filter(a => ['coin_upbit','coin_binance'].includes(a.category));
+  const sel = document.getElementById('bm-asset-id');
+  sel.innerHTML = coins.map(a =>
+    `<option value="${a.id}" data-qty="${a.quantity||0}" data-avg="${a.avg_price||0}" data-amt="${a.purchase_amount||0}">
+      ${a.name} (${a.ticker || '—'})
+    </option>`
+  ).join('');
+  document.getElementById('bm-add-amount').value = '';
+  document.getElementById('bm-add-price').value  = '';
+  document.getElementById('bm-preview').classList.add('hidden');
+  document.getElementById('buy-more-modal').classList.remove('hidden');
+}
+
+function updateBuyMorePreview() {
+  const sel      = document.getElementById('bm-asset-id');
+  const opt      = sel.options[sel.selectedIndex];
+  if (!opt) return;
+  const oldQty   = parseFloat(opt.dataset.qty) || 0;
+  const oldAvg   = parseFloat(opt.dataset.avg) || 0;
+  const oldAmt   = parseFloat(opt.dataset.amt) || 0;
+  const addAmt   = parseFloat(document.getElementById('bm-add-amount').value) || 0;
+  const addPrice = parseFloat(document.getElementById('bm-add-price').value)  || 0;
+
+  const preview = document.getElementById('bm-preview');
+  if (!addAmt || !addPrice) { preview.classList.add('hidden'); return; }
+
+  const addQty   = addAmt / addPrice;
+  const newQty   = oldQty + addQty;
+  const newAmt   = oldAmt + addAmt;
+  const newAvg   = newQty > 0 ? newAmt / newQty : 0;
+
+  const fmtQ = v => Number(v.toFixed(6)).toLocaleString('ko-KR', { maximumFractionDigits: 6 });
+  const fmtW = v => Math.round(v).toLocaleString('ko-KR') + '원';
+
+  document.getElementById('bm-pre-qty').textContent  = '+' + fmtQ(addQty);
+  document.getElementById('bm-old-qty').textContent  = fmtQ(oldQty);
+  document.getElementById('bm-new-qty').textContent  = fmtQ(newQty);
+  document.getElementById('bm-old-avg').textContent  = fmtW(oldAvg);
+  document.getElementById('bm-new-avg').textContent  = fmtW(newAvg);
+  document.getElementById('bm-old-amt').textContent  = fmtW(oldAmt);
+  document.getElementById('bm-new-amt').textContent  = fmtW(newAmt);
+  preview.classList.remove('hidden');
+}
+
+async function submitBuyMore() {
+  const assetId  = document.getElementById('bm-asset-id').value;
+  const addAmt   = parseFloat(document.getElementById('bm-add-amount').value);
+  const addPrice = parseFloat(document.getElementById('bm-add-price').value);
+  if (!assetId || !addAmt || !addPrice) { alert('모든 항목을 입력해주세요.'); return; }
+  const res = await fetch(`/api/assets/${assetId}/buy-more`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ add_amount: addAmt, add_price: addPrice }),
+  }).then(r => r.json());
+  if (res.ok) { closeModal('buy-more-modal'); loadAssets(); }
+  else alert(res.error || '오류 발생');
+}
+
 /* ── 공통: 섹션 테이블 빌더 ──────────────────────────────── */
-function sectionTable(label, items, type) {
+/* 공통 thead (주식·코인·연금 보유 테이블 공유) */
+const HOLDING_THEAD = `<thead>
+  <tr>
+    <th class="th-left">종목명</th>
+    <th class="th-left" style="min-width:70px">티커</th>
+    <th style="min-width:70px">수량</th>
+    <th style="min-width:90px">평균단가</th>
+    <th style="min-width:100px">매입금액</th>
+    <th style="min-width:110px">현재가 (KRW)</th>
+    <th style="min-width:100px">평가금액</th>
+    <th style="min-width:100px">손익</th>
+    <th style="min-width:70px">수익률</th>
+    <th style="min-width:56px"></th>
+  </tr>
+</thead>`;
+
+/* 섹션 하나의 tbody 반환 (label=섹션명, items=자산 배열) */
+function sectionTbody(label, items) {
   const totalPurchase = items.reduce((s, a) => s + (a.purchase_amount || 0), 0);
   const totalValue    = items.reduce((s, a) => s + (a.current_value   || 0), 0);
   const totalPL       = totalValue - totalPurchase;
@@ -688,35 +997,44 @@ function sectionTable(label, items, type) {
     </tr>`;
   }).join('');
 
-  return `
-    <div class="section-group">
-      <div class="section-group-header">
-        <span class="section-label" style="margin-bottom:0">${label}</span>
-        <div class="section-group-totals">
-          <span class="sg-total-item">평가 <strong>${fmtShort(totalValue)}</strong></span>
-          <span class="sg-total-item ${pCls}">손익 <strong>${fmtRate(totalRate)}</strong> (${fmtShort(totalPL)})</span>
-        </div>
-      </div>
-      <div class="table-card" style="margin-bottom:0">
-        <table class="asset-table">
-          <thead>
-            <tr>
-              <th class="th-left">종목명</th>
-              <th class="th-left">티커</th>
-              <th>수량</th>
-              <th>평균단가</th>
-              <th>매입금액</th>
-              <th>현재가 (KRW)</th>
-              <th>평가금액</th>
-              <th>손익</th>
-              <th>수익률</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>
-    </div>`;
+  return `<tbody class="section-tbody">
+    <tr class="section-subhead">
+      <td class="td-left" colspan="6">
+        <span class="section-label" style="margin:0;font-size:13px">${label}</span>
+      </td>
+      <td colspan="4" style="text-align:right">
+        <span class="sg-total-item">평가 <strong>${fmtShort(totalValue)}</strong> <span class="${pCls}">(${totalPL >= 0 ? '+' : ''}${fmtShort(totalPL)})</span></span>
+        <span class="sg-total-item ${pCls}" style="margin-left:16px"><strong>${fmtRate(totalRate)}</strong></span>
+      </td>
+    </tr>
+    ${rows}
+  </tbody>`;
+}
+
+/* 여러 섹션을 하나의 테이블로 (열 정렬 일치) */
+function multiSectionTable(sections, allItems) {
+  const tbodies = sections
+    .map(s => ({ label: s.label, items: allItems.filter(s.filter) }))
+    .filter(s => s.items.length)
+    .map(s => sectionTbody(s.label, s.items))
+    .join('');
+
+  return `<div class="table-card" style="margin-bottom:0;overflow-x:auto">
+    <table class="asset-table">
+      ${HOLDING_THEAD}
+      ${tbodies}
+    </table>
+  </div>`;
+}
+
+/* 하위 호환: 단일 섹션 테이블 */
+function sectionTable(label, items) {
+  return `<div class="table-card" style="margin-bottom:0">
+    <table class="asset-table">
+      ${HOLDING_THEAD}
+      ${sectionTbody(label, items)}
+    </table>
+  </div>`;
 }
 
 /* ── 부동산 탭 ────────────────────────────────────────────── */
@@ -749,9 +1067,9 @@ async function renderRealEstateTab() {
             <tr>
               <th class="th-left">자산명</th>
               <th class="th-left">아파트명 (티커)</th>
-              <th>매입금액</th>
-              <th>현재 평가액</th>
-              <th></th>
+              <th style="min-width:120px">매입금액</th>
+              <th style="min-width:120px">현재 평가액</th>
+              <th style="min-width:56px"></th>
             </tr>
           </thead>
           <tbody>${assetRows || '<tr><td colspan="5" class="table-empty">등록된 부동산이 없습니다.</td></tr>'}</tbody>
@@ -1236,6 +1554,196 @@ function renderHistoryTable(history) {
 
 /* ── 모달 ─────────────────────────────────────────────────── */
 function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+/* ── 실현손익 모달 ──────────────────────────────────────────── */
+let _pnlCategory = 'stocks';
+let _pnlEditId   = null;
+
+function openPnlModal(category, year, month, currentAmount) {
+  _pnlCategory = category;
+  _pnlEditId   = null;
+  document.getElementById('pnl-modal-title').textContent =
+    `실현손익 입력 · ${category === 'stocks' ? '주식' : '코인'}`;
+
+  const thisYear = new Date().getFullYear();
+  const today    = new Date().toISOString().slice(0,10);
+
+  // 코인: 날짜 입력 / 주식: 연도+월 선택 토글
+  const isCoins = category === 'coins';
+  document.getElementById('pnl-period-stocks').style.display = isCoins ? 'none' : '';
+  document.getElementById('pnl-period-coins').style.display  = isCoins ? '' : 'none';
+
+  if (!isCoins) {
+    const ySel = document.getElementById('pnl-year');
+    ySel.innerHTML = '';
+    for (let y = thisYear; y >= 2020; y--) {
+      const opt = document.createElement('option');
+      opt.value = y; opt.textContent = `${y}년`;
+      if (y === (year || thisYear)) opt.selected = true;
+      ySel.appendChild(opt);
+    }
+    document.getElementById('pnl-month').value = month || 0;
+  } else {
+    document.getElementById('pnl-deal-date').value = today;
+    // 보유 코인 목록 채우기
+    const coinSel = document.getElementById('pnl-coin-ticker');
+    coinSel.innerHTML = '';
+    const coins = _allAssets.filter(a => ['coin_upbit','coin_binance'].includes(a.category));
+    const seen = new Set();
+    coins.forEach(a => {
+      if (!a.ticker || seen.has(a.ticker)) return;
+      seen.add(a.ticker);
+      const opt = document.createElement('option');
+      opt.value = a.ticker;
+      opt.textContent = `${a.name} (${a.ticker})`;
+      coinSel.appendChild(opt);
+    });
+    document.getElementById('pnl-trade-amount').value = '';
+    document.getElementById('pnl-profit-rate').value  = '';
+    document.getElementById('pnl-calc-result').style.display = 'none';
+  }
+
+  const amt = currentAmount != null ? currentAmount : '';
+  document.getElementById('pnl-amount-display').value = amt !== '' ? Number(amt).toLocaleString('ko-KR') : '';
+  document.getElementById('pnl-amount-value').value   = amt;
+  document.getElementById('pnl-memo').value = '';
+  braunReset();
+  if (amt !== '') braunSetValue(amt);
+  document.getElementById('pnl-modal').classList.remove('hidden');
+}
+
+function closePnlModal() {
+  document.getElementById('pnl-modal').classList.add('hidden');
+}
+
+async function submitPnl() {
+  const raw    = document.getElementById('pnl-amount-value').value;
+  const amount = parseFloat(raw);
+  if (isNaN(amount)) { alert('금액을 입력해주세요.'); return; }
+  const memo = document.getElementById('pnl-memo').value;
+
+  let body;
+  if (_pnlCategory === 'coins') {
+    const deal_date    = document.getElementById('pnl-deal-date').value;
+    const ticker       = document.getElementById('pnl-coin-ticker').value;
+    const trade_amount = parseFloat(document.getElementById('pnl-trade-amount').value) || 0;
+    const profit_rate  = parseFloat(document.getElementById('pnl-profit-rate').value)  || 0;
+    if (!deal_date) { alert('거래일을 입력해주세요.'); return; }
+    body = { category: 'coins', deal_date, amount, memo, ticker, trade_amount, profit_rate };
+  } else {
+    const year  = parseInt(document.getElementById('pnl-year').value);
+    const month = parseInt(document.getElementById('pnl-month').value);
+    body = { category: _pnlCategory, year, month, amount, memo };
+  }
+
+  await fetch('/api/realized-pnl', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  closePnlModal();
+  await refreshPnlPopup(_pnlCategory);
+}
+
+/* ── Braun 계산기 로직 ──────────────────────────────────────── */
+let _bExpr    = '';   // 현재 입력 표현식
+let _bResult  = null; // 마지막 = 결과
+let _bNewNum  = true; // 다음 숫자 입력 시 새 숫자 시작 여부
+
+function braunReset() {
+  _bExpr = ''; _bResult = null; _bNewNum = true;
+  _braunShow('0');
+}
+function braunSetValue(v) {
+  _bExpr = String(v); _bResult = v; _bNewNum = true;
+  _braunShow(v);
+}
+function _braunShow(v) {
+  const n = parseFloat(v);
+  const display = isNaN(n) ? '오류'
+    : n.toLocaleString('ko-KR', { maximumFractionDigits: 8 });
+  document.getElementById('braun-display').textContent = display;
+}
+
+function braunKey(k) {
+  if (k === 'AC') { braunReset(); return; }
+  if (k === '+/-') {
+    if (_bExpr !== '' && _bExpr !== '0') {
+      _bExpr = _bExpr.startsWith('-') ? _bExpr.slice(1) : '-' + _bExpr;
+      _bNewNum = false;
+      try { _braunShow(eval(_bExpr)); } catch(e) {}
+    }
+    return;
+  }
+  if (k === '%') {
+    try {
+      const v = eval(_bExpr) / 100;
+      _bExpr = String(v); _bResult = v; _bNewNum = true;
+      _braunShow(v);
+    } catch(e) {}
+    return;
+  }
+  if (['+','-','*','/'].includes(k)) {
+    if (_bExpr === '') return;
+    _bExpr += k; _bNewNum = true;
+    return;
+  }
+  if (k === '=') {
+    if (_bExpr === '') return;
+    try {
+      const v = eval(_bExpr);
+      _bResult = v; _bExpr = String(v); _bNewNum = true;
+      _braunShow(v);
+    } catch(e) { _braunShow('오류'); }
+    return;
+  }
+  // 숫자 / 소수점
+  if (_bNewNum && ['+','-','*','/'].every(op => !_bExpr.endsWith(op))) {
+    _bExpr = ''; _bNewNum = false;
+  }
+  if (k === '.' && _bExpr.split(/[+\-*/]/).pop().includes('.')) return;
+  _bExpr += k;
+  try { _braunShow(eval(_bExpr)); } catch(e) {}
+}
+
+function braunApply() {
+  let v;
+  try { v = eval(_bExpr); } catch(e) { return; }
+  if (isNaN(v)) return;
+  v = Math.round(v * 100) / 100;
+  document.getElementById('pnl-amount-display').value = v.toLocaleString('ko-KR');
+  document.getElementById('pnl-amount-value').value   = v;
+  braunSetValue(v);
+}
+
+/* 코인 손익 자동계산 */
+function calcCoinPnl() {
+  const tradeAmt  = parseFloat(document.getElementById('pnl-trade-amount').value);
+  const rate      = parseFloat(document.getElementById('pnl-profit-rate').value);
+  const resultEl  = document.getElementById('pnl-calc-result');
+  const valueEl   = document.getElementById('pnl-calc-value');
+  if (isNaN(tradeAmt) || isNaN(rate)) { resultEl.style.display = 'none'; return; }
+
+  // 실현손익 = 거래금액 × (수익률/100)
+  const pnl = Math.round(tradeAmt * rate / 100);
+  const cls  = pnl > 0 ? 'profit' : pnl < 0 ? 'loss' : 'neutral';
+  const sign = pnl > 0 ? '+' : '';
+  valueEl.innerHTML = `<span class="${cls}">${sign}${pnl.toLocaleString('ko-KR')}원</span>`;
+  resultEl.style.display = 'flex';
+
+  // hidden 필드에도 반영
+  document.getElementById('pnl-amount-display').value = pnl.toLocaleString('ko-KR');
+  document.getElementById('pnl-amount-value').value   = pnl;
+  braunSetValue(pnl);
+}
+
+/* 직접 숫자 입력 시 hidden value 동기화 */
+function pnlAmountInput(el) {
+  const raw = el.value.replace(/,/g, '').trim();
+  const v   = parseFloat(raw);
+  document.getElementById('pnl-amount-value').value = isNaN(v) ? '' : v;
+  if (!isNaN(v)) braunSetValue(v);
+}
 
 function openAddModal() {
   editingAssetId = null;

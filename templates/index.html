@@ -12,52 +12,48 @@
 </head>
 <body>
 
-<!-- ── Global Nav ─────────────────────────────────────────── -->
-<header class="global-nav">
-  <div class="global-nav-inner">
-    <span class="global-nav-logo">자산 트래커</span>
-    <div class="global-nav-actions">
-      <span id="usd-krw" class="global-nav-meta">USD/KRW —</span>
-      <button class="btn-nav-icon" onclick="refreshAll()" title="새로고침">
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M7 1.5A5.5 5.5 0 1 1 1.5 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          <path d="M1.5 3.5V7H5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </button>
+<!-- ── Sticky Header (Summary + Sub-nav) ─────────────────── -->
+<div class="sticky-header">
+
+  <!-- Summary Bar -->
+  <div class="summary-bar">
+    <div class="summary-bar-inner">
+      <div class="summary-bar-item">
+        <span class="summary-bar-label">순자산</span>
+        <span class="summary-bar-value summary-bar-value--blue" id="net-worth">—</span>
+      </div>
+      <div class="summary-bar-divider"></div>
+      <div class="summary-bar-item">
+        <span class="summary-bar-label">총자산</span>
+        <span class="summary-bar-value summary-bar-value--green" id="total-assets">—</span>
+      </div>
+      <div class="summary-bar-divider"></div>
+      <div class="summary-bar-item">
+        <span class="summary-bar-label">총부채</span>
+        <span class="summary-bar-value summary-bar-value--red" id="total-liabilities">—</span>
+      </div>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:14px">
+        <span class="summary-bar-meta" id="updated-at"></span>
+        <span id="usd-krw" class="summary-bar-meta">USD/KRW —</span>
+        <button class="btn-nav-icon" onclick="refreshAll()" title="새로고침">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M7 1.5A5.5 5.5 0 1 1 1.5 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M1.5 3.5V7H5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
     </div>
   </div>
-</header>
 
-<!-- ── Summary Bar ────────────────────────────────────────── -->
-<div class="summary-bar">
-  <div class="summary-bar-inner">
-    <div class="summary-bar-item">
-      <span class="summary-bar-label">순자산</span>
-      <span class="summary-bar-value summary-bar-value--blue" id="net-worth">—</span>
-    </div>
-    <div class="summary-bar-divider"></div>
-    <div class="summary-bar-item">
-      <span class="summary-bar-label">총자산</span>
-      <span class="summary-bar-value summary-bar-value--green" id="total-assets">—</span>
-    </div>
-    <div class="summary-bar-divider"></div>
-    <div class="summary-bar-item">
-      <span class="summary-bar-label">총부채</span>
-      <span class="summary-bar-value summary-bar-value--red" id="total-liabilities">—</span>
-    </div>
-    <span class="summary-bar-meta" id="updated-at"></span>
-  </div>
-</div>
-
-<!-- ── Sub-nav (Frosted, Sticky) ─────────────────────────── -->
-<nav class="sub-nav-frosted" id="sub-nav">
+  <!-- Sub-nav -->
+  <nav class="sub-nav-frosted" id="sub-nav">
   <div class="sub-nav-inner">
     <div class="sub-nav-tabs">
       <button class="sub-tab active" onclick="switchTab('assets')">자산 현황</button>
       <button class="sub-tab" onclick="switchTab('bank')">예/적금</button>
       <button class="sub-tab" onclick="switchTab('stocks')">주식</button>
-      <button class="sub-tab" onclick="switchTab('pension')">연금</button>
       <button class="sub-tab" onclick="switchTab('coins')">코인</button>
+      <button class="sub-tab" onclick="switchTab('pension')">연금</button>
       <button class="sub-tab" onclick="switchTab('loans')">대출 현황</button>
       <button class="sub-tab" onclick="switchTab('realestate')">부동산</button>
       <button class="sub-tab" onclick="switchTab('history')">자산 추이</button>
@@ -65,6 +61,8 @@
     <button class="btn-primary" onclick="openAddModal()">자산 추가</button>
   </div>
 </nav>
+
+</div><!-- /.sticky-header -->
 
 <!-- ── Main Content ───────────────────────────────────────── -->
 <main class="main-content">
@@ -77,13 +75,13 @@
       <table class="asset-table">
         <thead>
           <tr>
-            <th class="th-left">분류</th>
+            <th class="th-left" style="min-width:80px">분류</th>
             <th class="th-left">계좌 / 종류</th>
-            <th>종목 수</th>
-            <th>매입금액</th>
-            <th>평가금액</th>
-            <th>손익</th>
-            <th>수익률</th>
+            <th style="min-width:60px">종목 수</th>
+            <th style="min-width:110px">매입금액</th>
+            <th style="min-width:110px">평가금액</th>
+            <th style="min-width:110px">손익</th>
+            <th style="min-width:80px">수익률</th>
           </tr>
         </thead>
         <tbody id="overview-tbody">
@@ -140,12 +138,12 @@
       <table class="asset-table">
         <thead>
           <tr>
-            <th class="th-left">날짜</th>
-            <th>총 자산</th>
-            <th>총 부채</th>
-            <th>순 자산</th>
+            <th class="th-left" style="min-width:100px">날짜</th>
+            <th style="min-width:120px">총 자산</th>
+            <th style="min-width:110px">총 부채</th>
+            <th style="min-width:120px">순 자산</th>
             <th class="th-left">메모</th>
-            <th></th>
+            <th style="min-width:56px"></th>
           </tr>
         </thead>
         <tbody id="history-tbody">
@@ -365,6 +363,177 @@
 </div>
 
 <!-- 개인연금(회사) 평가액 수정 -->
+<!-- 추가 매수 모달 -->
+<div id="buy-more-modal" class="modal-overlay hidden" onclick="closeModal('buy-more-modal')">
+  <div class="modal" style="max-width:400px" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2 class="modal-title">추가 매수</h2>
+      <button class="modal-close" onclick="closeModal('buy-more-modal')">×</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">코인</label>
+      <select id="bm-asset-id" class="form-control" onchange="updateBuyMorePreview()"></select>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">매수금액 (원)</label>
+        <input id="bm-add-amount" class="form-control" type="number" placeholder="0" oninput="updateBuyMorePreview()">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">매수단가 (원)</label>
+        <input id="bm-add-price" class="form-control" type="number" placeholder="0" oninput="updateBuyMorePreview()">
+      </div>
+    </div>
+    <!-- 미리보기 -->
+    <div id="bm-preview" class="bm-preview hidden">
+      <div class="bm-preview-row">
+        <span>추가 수량</span><span id="bm-pre-qty">—</span>
+      </div>
+      <div class="bm-preview-row bm-preview-divider">
+        <span>변경 전 → 후</span><span></span>
+      </div>
+      <div class="bm-preview-row">
+        <span>총 수량</span>
+        <span><span id="bm-old-qty" class="bm-old"></span> → <strong id="bm-new-qty"></strong></span>
+      </div>
+      <div class="bm-preview-row">
+        <span>평균단가</span>
+        <span><span id="bm-old-avg" class="bm-old"></span> → <strong id="bm-new-avg"></strong></span>
+      </div>
+      <div class="bm-preview-row">
+        <span>매입금액</span>
+        <span><span id="bm-old-amt" class="bm-old"></span> → <strong id="bm-new-amt"></strong></span>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary-pill" onclick="closeModal('buy-more-modal')">취소</button>
+      <button class="btn-primary" onclick="submitBuyMore()">적용</button>
+    </div>
+  </div>
+</div>
+
+<!-- 실현손익 팝업 -->
+<div id="pnl-popup" class="modal-overlay hidden" onclick="closePnlPopup()">
+  <div class="modal" style="max-width:780px;width:100%" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2 class="modal-title" id="pnl-popup-title">실현손익</h2>
+      <div style="display:flex;align-items:center;gap:10px">
+        <button class="btn-primary" style="font-size:12px;padding:6px 16px"
+          onclick="openPnlModal(document.getElementById('pnl-popup-category').value)">+ 입력</button>
+        <button class="modal-close" onclick="closePnlPopup()">×</button>
+      </div>
+    </div>
+    <input id="pnl-popup-category" type="hidden" value="stocks">
+    <div id="pnl-popup-body"></div>
+  </div>
+</div>
+
+<!-- 실현손익 입력 모달 (Braun 계산기) -->
+<div id="pnl-modal" class="modal-overlay hidden" onclick="closePnlModal()">
+  <div class="modal pnl-modal-wrap" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2 class="modal-title" id="pnl-modal-title">실현손익 입력</h2>
+      <button class="modal-close" onclick="closePnlModal()">×</button>
+    </div>
+    <div class="pnl-modal-body">
+      <div class="pnl-form-side">
+        <!-- 주식: 연도+월 -->
+        <div id="pnl-period-stocks" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">연도</label>
+            <select id="pnl-year" class="form-control"></select>
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">월</label>
+            <select id="pnl-month" class="form-control">
+              <option value="0">연간 합산</option>
+              <option value="1">1월</option><option value="2">2월</option>
+              <option value="3">3월</option><option value="4">4월</option>
+              <option value="5">5월</option><option value="6">6월</option>
+              <option value="7">7월</option><option value="8">8월</option>
+              <option value="9">9월</option><option value="10">10월</option>
+              <option value="11">11월</option><option value="12">12월</option>
+            </select>
+          </div>
+        </div>
+        <!-- 코인: 거래일 + 티커 + 거래금액 + 수익률 -->
+        <div id="pnl-period-coins" style="display:none">
+          <div class="form-group">
+            <label class="form-label">거래일</label>
+            <input id="pnl-deal-date" class="form-control" type="date">
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label">코인</label>
+              <select id="pnl-coin-ticker" class="form-control" onchange="calcCoinPnl()"></select>
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label class="form-label">거래금액 (원)</label>
+              <input id="pnl-trade-amount" class="form-control" type="number" placeholder="0" oninput="calcCoinPnl()">
+            </div>
+          </div>
+          <div class="form-group" style="margin-top:12px">
+            <label class="form-label">수익률 (%)</label>
+            <input id="pnl-profit-rate" class="form-control" type="number" step="0.01" placeholder="예: 12.5 또는 -8.3" oninput="calcCoinPnl()">
+          </div>
+          <div class="pnl-calc-result" id="pnl-calc-result" style="display:none">
+            <span class="pnl-calc-label">예상 실현손익</span>
+            <span class="pnl-calc-value" id="pnl-calc-value">—</span>
+          </div>
+          <div style="margin-bottom:14px"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">실현손익</label>
+          <div class="pnl-amount-display-wrap">
+            <input id="pnl-amount-display" class="pnl-amount-display" type="text" placeholder="직접 입력 또는 계산기 사용" oninput="pnlAmountInput(this)">
+            <span class="pnl-amount-unit">원</span>
+          </div>
+          <input id="pnl-amount-value" type="hidden">
+        </div>
+        <div class="form-group">
+          <label class="form-label">메모 <span class="form-hint">(선택)</span></label>
+          <input id="pnl-memo" class="form-control" type="text" placeholder="">
+        </div>
+        <div class="pnl-form-footer">
+          <button class="btn-secondary-pill" onclick="closePnlModal()">취소</button>
+          <button class="btn-primary" onclick="submitPnl()">저장</button>
+        </div>
+      </div>
+      <div class="braun-calc">
+        <div class="braun-display-wrap">
+          <div class="braun-display" id="braun-display">0</div>
+        </div>
+        <div class="braun-keys">
+          <button class="bk bk-fn" onclick="braunKey('AC')">AC</button>
+          <button class="bk bk-fn" onclick="braunKey('+/-')">+/−</button>
+          <button class="bk bk-fn" onclick="braunKey('%')">%</button>
+          <button class="bk bk-op" onclick="braunKey('/')">÷</button>
+
+          <button class="bk bk-num" onclick="braunKey('7')">7</button>
+          <button class="bk bk-num" onclick="braunKey('8')">8</button>
+          <button class="bk bk-num" onclick="braunKey('9')">9</button>
+          <button class="bk bk-op" onclick="braunKey('*')">×</button>
+
+          <button class="bk bk-num" onclick="braunKey('4')">4</button>
+          <button class="bk bk-num" onclick="braunKey('5')">5</button>
+          <button class="bk bk-num" onclick="braunKey('6')">6</button>
+          <button class="bk bk-op" onclick="braunKey('-')">−</button>
+
+          <button class="bk bk-num" onclick="braunKey('1')">1</button>
+          <button class="bk bk-num" onclick="braunKey('2')">2</button>
+          <button class="bk bk-num" onclick="braunKey('3')">3</button>
+          <button class="bk bk-op" onclick="braunKey('+')">+</button>
+
+          <button class="bk bk-num bk-zero" onclick="braunKey('0')">0</button>
+          <button class="bk bk-num" onclick="braunKey('.')">.</button>
+          <button class="bk bk-eq" onclick="braunKey('=')">＝</button>
+        </div>
+        <button class="braun-apply" onclick="braunApply()">↑ 금액으로 적용</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="pc-value-modal" class="modal-overlay hidden" onclick="closeModal('pc-value-modal')">
   <div class="modal" onclick="event.stopPropagation()" style="max-width:360px">
     <div class="modal-header">
